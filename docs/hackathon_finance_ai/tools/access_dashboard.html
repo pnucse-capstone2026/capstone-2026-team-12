@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>조목조목 접근 로그 대시보드 (로컬 전용)</title>
+<style>
+  /* 로컬 운영 도구 — 배포 금지. Render 로그(대시보드 복사 또는 `render logs`)를
+     붙여 넣으면 브라우저 안에서만 분석한다. 외부 전송 없음. */
+  :root { color-scheme: light dark; }
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-ok: #2a78d6;      /* 범주 슬롯 1 (파랑) — 정상 응답 */
+    --series-err: #eb6834;     /* 범주 슬롯 2 (주황) — 오류·차단 */
+    --accent: #2a78d6;
+    --danger-text: #b02a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-ok: #3987e5;
+      --series-err: #d95926;
+      --accent: #3987e5;
+      --danger-text: #e66767;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-ok: #3987e5;
+    --series-err: #d95926;
+    --accent: #3987e5;
+    --danger-text: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  body.viz-root {
+    margin: 0; padding: 24px;
+    background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  header.top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  header.top h1 { font-size: 18px; margin: 0; }
+  header.top .sub { color: var(--text-muted); font-size: 12.5px; }
+  header.top .spacer { flex: 1; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 13.5px; margin: 0 0 10px; color: var(--text-secondary); font-weight: 600; }
+
+  textarea {
+    width: 100%; min-height: 96px; resize: vertical;
+    background: var(--page); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    font: 12px/1.5 ui-monospace, Menlo, monospace;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  button, select, input[type="text"] {
+    font: inherit; color: var(--text-primary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  select, input[type="text"] { cursor: auto; }
+  button.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+  button:hover { border-color: var(--baseline); }
+  label.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); cursor: pointer; }
+  .hint { color: var(--text-muted); font-size: 12.5px; margin-top: 8px; }
+  .hint code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+
+  /* 필터 행 — 차트 위 한 줄, 아래 전부에 적용 */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .filters .lead { color: var(--text-muted); font-size: 12.5px; }
+
+  /* KPI 타일 */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .tile .label { font-size: 12px; color: var(--text-secondary); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile .note { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+  /* 차트 */
+  .legend { display: flex; gap: 14px; align-items: center; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; }
+  .legend .key { display: inline-flex; gap: 6px; align-items: center; }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .chart-head { display: flex; align-items: center; }
+  .chart-head .spacer { flex: 1; }
+  .chart-wrap { position: relative; }
+  svg text { font-family: inherit; }
+  .tick-text { font-size: 11px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .empty { color: var(--text-muted); text-align: center; padding: 36px 12px; }
+
+  /* 툴팁 — 값이 주, 이름이 부 */
+  #tooltip {
+    position: fixed; z-index: 10; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    min-width: 150px;
+  }
+  #tooltip .t-title { color: var(--text-muted); font-size: 11.5px; margin-bottom: 4px; }
+  #tooltip .t-row { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
+  #tooltip .t-key { width: 12px; height: 3px; border-radius: 2px; }
+  #tooltip .t-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #tooltip .t-name { color: var(--text-secondary); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--text-muted); font-weight: 600; font-size: 11.5px;
+       border-bottom: 1px solid var(--grid); padding: 6px 8px; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.path { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; word-break: break-all; }
+  tr.err td { color: var(--danger-text); }
+  .grid2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .scroll { max-height: 340px; overflow-y: auto; }
+</style>
+</head>
+<body class="viz-root">
+
+<header class="top">
+  <h1>조목조목 접근 로그 대시보드</h1>
+  <span class="sub">로컬 전용 · 브라우저 밖으로 데이터가 나가지 않습니다</span>
+  <span class="spacer"></span>
+  <button id="themeBtn" type="button" aria-label="테마 전환">테마 전환</button>
+</header>
+
+<section class="card">
+  <h2>로그 입력</h2>
+  <textarea id="logInput" placeholder="Render 로그를 여기에 붙여 넣으세요. backend(Spring)·agent(FastAPI) 로그를 함께 넣어도 자동으로 구분합니다."></textarea>
+  <div class="row">
+    <button class="primary" id="addBtn" type="button">추가하고 분석</button>
+    <input type="file" id="fileInput" accept=".log,.txt,.json" multiple>
+    <button id="sampleBtn" type="button">예시 데이터</button>
+    <button id="clearBtn" type="button">전체 지우기</button>
+    <span class="hint" id="storeInfo"></span>
+  </div>
+  <p class="hint">
+    가져오는 방법: Render 대시보드 → 서비스 → <b>Logs</b> 탭에서 복사하거나,
+    CLI로 <code>render logs -r &lt;서비스ID&gt; --limit 1000</code> 결과를 저장해서 올립니다.
+    추가한 로그는 이 브라우저의 localStorage에만 보관됩니다.
+  </p>
+</section>
+
+<div class="filters">
+  <span class="lead">필터</span>
+  <select id="rangeSel" aria-label="기간">
+    <option value="all">전체 기간</option>
+    <option value="1h">마지막 1시간</option>
+    <option value="6h">마지막 6시간</option>
+    <option value="24h">마지막 24시간</option>
+    <option value="judge">심사 기간 (9/7 11:00 ~ 9/11 23:59)</option>
+  </select>
+  <select id="serviceSel" aria-label="서비스">
+    <option value="all">서비스 전체</option>
+    <option value="backend">backend만</option>
+    <option value="agent">agent만</option>
+  </select>
+  <label class="chk"><input type="checkbox" id="healthChk" checked> /health 제외 (Render 자체 점검 소음)</label>
+  <input type="text" id="pathFilter" placeholder="경로 검색 (예: analyze)" aria-label="경로 검색">
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<section class="card">
+  <div class="chart-head">
+    <h2>요청 추이</h2>
+    <span class="spacer"></span>
+    <button id="tableToggle" type="button" aria-pressed="false">표로 보기</button>
+  </div>
+  <div class="legend" id="chartLegend">
+    <span class="key"><span class="sw" style="background:var(--series-ok)"></span>정상 (2xx·3xx)</span>
+    <span class="key"><span class="sw" style="background:var(--series-err)"></span>오류·차단 (4xx·5xx)</span>
+  </div>
+  <div class="chart-wrap" id="chartWrap"></div>
+  <div id="chartTable" hidden></div>
+</section>
+
+<div class="grid2">
+  <section class="card">
+    <h2>엔드포인트별 집계 (상위 15)</h2>
+    <div class="scroll" id="endpointTable"></div>
+  </section>
+  <section class="card">
+    <h2>가드레일·경고 이벤트</h2>
+    <div class="scroll" id="eventList"></div>
+  </section>
+</div>
+
+<section class="card">
+  <h2>최근 요청 (필터 적용, 최신 100건)</h2>
+  <div class="scroll" id="recentTable"></div>
+</section>
+
+<div id="tooltip" role="status"></div>
+
+<script>
+'use strict';
+/* ===== PARSER-BEGIN (순수 함수 — node로 단독 테스트 가능) ===== */
+const REQ_RE = /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\/[^\s"]*)\s*->\s*(\d{3})\s*\((\d+(?:\.\d+)?)\s*(ms|s)\b(?:,\s*(\d+)\s*B)?\)/;
+const ISO_RE = /(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:[.,](\d{1,6}))?\s*(Z|[+-]\d{2}:?\d{2})?/;
+const US_RE = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)\b/;
+const MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+
+function parseTimestamp(line) {
+  const iso = ISO_RE.exec(line);
+  if (iso) {
+    const frac = iso[3] ? '.' + iso[3].slice(0, 3) : '';
+    // 시간대 표기가 없으면 UTC로 해석한다 — Render 컨테이너의 Python asctime은
+    // UTC 기록이라, 로컬로 읽으면 backend(오프셋 포함)와 9시간 어긋난다.
+    const tz = iso[4] ? iso[4].replace(/(\d{2})(\d{2})$/, '$1:$2') : 'Z';
+    const t = Date.parse(iso[1] + 'T' + iso[2] + frac + tz);
+    if (!Number.isNaN(t)) return t;
+  }
+  const us = US_RE.exec(line);
+  if (us) {
+    let h = Number(us[3]) % 12;
+    if (us[6] === 'PM') h += 12;
+    const d = new Date();
+    d.setMonth(MONTHS[us[1]], Number(us[2]));
+    d.setHours(h, Number(us[4]), Number(us[5]), 0);
+    return d.getTime();
+  }
+  return null;
+}
+
+function parseLine(rawLine) {
+  let line = rawLine;
+  let jsonTs = null;
+  // `render logs -o json` 형식: 한 줄이 {"message": "...", "timestamp": "..."}
+  if (line.trimStart().startsWith('{')) {
+    try {
+      const obj = JSON.parse(line);
+      if (typeof obj.message === 'string') {
+        if (obj.timestamp) {
+          jsonTs = parseTimestamp(String(obj.timestamp));
+          if (jsonTs == null) {
+            const t = Date.parse(String(obj.timestamp));
+            jsonTs = Number.isNaN(t) ? null : t;
+          }
+        }
+        line = obj.message;
+      }
+    } catch { /* JSON이 아니면 평문으로 처리 */ }
+  }
+  const ts = jsonTs ?? parseTimestamp(line);
+  const m = REQ_RE.exec(line);
+  if (m) {
+    const durMs = m[5] === 's' ? Number(m[4]) * 1000 : Number(m[4]);
+    // backend(AccessLogFilter)는 ms+바이트, agent(access 미들웨어)는 초 단위만 남긴다
+    const service = m[5] === 's' ? 'agent' : 'backend';
+    return { kind: 'req', ts, service, method: m[1], path: m[2],
+             status: Number(m[3]), durMs, bytes: m[6] != null ? Number(m[6]) : null };
+  }
+  if (/서비스 토큰 불일치|백엔드 우회/.test(line))
+    return { kind: 'event', ts, type: '토큰 불일치 (직접 호출 시도)', text: line.trim() };
+  if (/비용 상한 도달|일일 비용 상한/.test(line))
+    return { kind: 'event', ts, type: '일일 비용 상한', text: line.trim() };
+  if (/\b(WARN|WARNING|ERROR)\b/.test(line))
+    return { kind: 'event', ts, type: '경고·오류 로그', text: line.trim() };
+  return null;
+}
+
+function parseLogs(text) {
+  const entries = [], events = [];
+  for (const raw of text.split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    const p = parseLine(raw);
+    if (!p) continue;
+    if (p.kind === 'req') entries.push(p); else events.push(p);
+  }
+  return { entries, events };
+}
+/* ===== PARSER-END ===== */
+
+const $ = (id) => document.getElementById(id);
+const STORE_KEY = 'halffifty_admin_logs_v1';
+let data = { entries: [], events: [] };
+
+function loadStore() {
+  const raw = localStorage.getItem(STORE_KEY) || '';
+  data = parseLogs(raw);
+  $('storeInfo').textContent = raw
+    ? `보관 중: ${(raw.length / 1024).toFixed(0)}KB · 요청 ${data.entries.length}건`
+    : '보관된 로그 없음';
+}
+
+function appendRaw(text) {
+  if (!text.trim()) return;
+  const prev = localStorage.getItem(STORE_KEY) || '';
+  try {
+    localStorage.setItem(STORE_KEY, prev ? prev + '\n' + text : text);
+  } catch {
+    alert('localStorage 용량을 초과했습니다. 전체 지우기 후 필요한 구간만 추가해 주세요.');
+    return;
+  }
+  loadStore(); render();
+}
+
+/* ----- 필터 ----- */
+function filtered() {
+  const svc = $('serviceSel').value;
+  const noHealth = $('healthChk').checked;
+  const q = $('pathFilter').value.trim().toLowerCase();
+  const range = $('rangeSel').value;
+
+  let maxTs = 0;
+  for (const e of data.entries) if (e.ts && e.ts > maxTs) maxTs = e.ts;
+  let from = -Infinity, to = Infinity;
+  if (range.endsWith('h') && maxTs) {
+    from = maxTs - Number(range.slice(0, -1)) * 3600_000;
+  } else if (range === 'judge') {
+    from = new Date('2026-09-07T11:00:00+09:00').getTime();
+    to = new Date('2026-09-11T23:59:59+09:00').getTime();
+  }
+  const keep = (e) =>
+    (svc === 'all' || e.service === svc) &&
+    (!noHealth || !/^\/(health|api\/health)/.test(e.path || '')) &&
+    (!q || (e.path || '').toLowerCase().includes(q)) &&
+    (e.ts == null ? range === 'all' : (e.ts >= from && e.ts <= to));
+  return {
+    entries: data.entries.filter(keep),
+    events: data.events.filter((e) => e.ts == null ? range === 'all' : (e.ts >= from && e.ts <= to)),
+  };
+}
+
+/* ----- KPI ----- */
+const isOk = (s) => s < 400;
+const isAnalyze = (e) => e.method === 'POST' && /analy/.test(e.path);
+const fmtDur = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + '초' : Math.round(ms) + 'ms';
+const fmtTime = (ts) => ts == null ? '—' :
+  new Date(ts).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+function tile(label, value, note) {
+  const d = document.createElement('div'); d.className = 'tile';
+  const l = document.createElement('div'); l.className = 'label'; l.textContent = label;
+  const v = document.createElement('div'); v.className = 'value'; v.textContent = value;
+  d.append(l, v);
+  if (note) { const n = document.createElement('div'); n.className = 'note'; n.textContent = note; d.append(n); }
+  return d;
+}
+
+function renderKpis(f) {
+  const box = $('kpis'); box.replaceChildren();
+  const total = f.entries.length;
+  const analyze = f.entries.filter(isAnalyze);
+  const analyzeOk = analyze.filter((e) => isOk(e.status));
+  const avgDur = analyzeOk.length
+    ? analyzeOk.reduce((s, e) => s + e.durMs, 0) / analyzeOk.length : null;
+  const blocked = f.entries.filter((e) => e.status === 403 || e.status === 429).length;
+  const server5 = f.entries.filter((e) => e.status >= 500).length;
+  box.append(
+    tile('총 요청', String(total)),
+    tile('분석 실행', String(analyze.length), `성공 ${analyzeOk.length}건`),
+    tile('분석 평균 소요', avgDur == null ? '—' : fmtDur(avgDur), '성공 건 기준'),
+    tile('차단·제한 (403·429)', String(blocked)),
+    tile('서버 오류 (5xx)', String(server5)),
+    tile('경고 이벤트', String(f.events.length), '토큰 불일치·비용 상한 등'),
+  );
+}
+
+/* ----- 시간 버킷 ----- */
+function bucketize(entries) {
+  const stamped = entries.filter((e) => e.ts != null);
+  if (!stamped.length) return { buckets: [], size: 0, unstamped: entries.length };
+  let min = Infinity, max = 0;
+  for (const e of stamped) { if (e.ts < min) min = e.ts; if (e.ts > max) max = e.ts; }
+  const span = Math.max(max - min, 1);
+  const size = span <= 2 * 3600_000 ? 60_000
+    : span <= 12 * 3600_000 ? 600_000
+    : span <= 3 * 86400_000 ? 3600_000 : 86400_000;
+  const map = new Map();
+  for (const e of stamped) {
+    const key = Math.floor(e.ts / size) * size;
+    let b = map.get(key);
+    if (!b) { b = { t: key, ok: 0, err: 0 }; map.set(key, b); }
+    if (isOk(e.status)) b.ok++; else b.err++;
+  }
+  const first = Math.floor(min / size) * size, last = Math.floor(max / size) * size;
+  const buckets = [];
+  for (let t = first; t <= last; t += size)
+    buckets.push(map.get(t) || { t, ok: 0, err: 0 });
+  return { buckets, size, unstamped: entries.length - stamped.length };
+}
+
+const bucketLabel = (t, size) => new Date(t).toLocaleString('ko-KR',
+  size >= 86400_000 ? { month: 'numeric', day: 'numeric' }
+    : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+
+function niceMax(v) {
+  if (v <= 4) return 4;
+  const pow = 10 ** Math.floor(Math.log10(v));
+  for (const m of [1, 2, 5, 10]) if (m * pow >= v) return m * pow;
+  return 10 * pow;
+}
+
+/* ----- 차트 (SVG 누적 기둥) ----- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function el(name, attrs) {
+  const n = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+}
+
+function renderChart(f) {
+  const wrap = $('chartWrap'); wrap.replaceChildren();
+  const { buckets, size, unstamped } = bucketize(f.entries);
+  if (!buckets.length) {
+    const p = document.createElement('p'); p.className = 'empty';
+    p.textContent = data.entries.length
+      ? `보관 중인 요청 ${data.entries.length}건이 전부 필터에 걸러졌습니다. ` +
+        `'/health 제외'를 해제하거나 기간·서비스·경로 필터를 넓혀 보세요.`
+      : '표시할 로그가 없습니다. 위 입력 칸에 Render 로그를 붙여 넣어 주세요.';
+    wrap.append(p); renderChartTable([], 0); return;
+  }
+  const W = Math.max(wrap.clientWidth || 720, 320), H = 220;
+  const padL = 44, padR = 8, padT = 8, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const yMax = niceMax(Math.max(...buckets.map((b) => b.ok + b.err)));
+  const band = plotW / buckets.length;
+  const barW = Math.max(3, Math.min(24, Math.floor(band) - 2));
+  const y = (v) => padT + plotH * (1 - v / yMax);
+
+  const svg = el('svg', { width: W, height: H, role: 'img',
+    'aria-label': '시간대별 요청 수 누적 기둥 차트' });
+
+  for (let i = 0; i <= 4; i++) {                       // 눈금 + 헤어라인 그리드
+    const v = (yMax / 4) * i, gy = y(v);
+    svg.append(el('line', { x1: padL, x2: W - padR, y1: gy, y2: gy,
+      stroke: i === 0 ? 'var(--baseline)' : 'var(--grid)', 'stroke-width': 1 }));
+    const t = el('text', { x: padL - 6, y: gy + 4, 'text-anchor': 'end', class: 'tick-text' });
+    t.textContent = String(v); svg.append(t);
+  }
+
+  const step = Math.ceil(buckets.length / Math.floor(plotW / 64));
+  buckets.forEach((b, i) => {
+    const cx = padL + band * i + band / 2;
+    const total = b.ok + b.err;
+    if (i % step === 0) {
+      const t = el('text', { x: cx, y: H - 8, 'text-anchor': 'middle', class: 'tick-text' });
+      t.textContent = bucketLabel(b.t, size); svg.append(t);
+    }
+    if (total > 0) {
+      const x0 = cx - barW / 2;
+      const gap = b.ok > 0 && b.err > 0 ? 2 : 0;      // 세그먼트 사이 2px 표면 간격
+      const okH = plotH * (b.ok / yMax), errH = plotH * (b.err / yMax);
+      const topH = b.err > 0 ? errH : okH;            // 최상단 세그먼트만 4px 라운드
+      const r = Math.min(4, topH);
+      const yTop = y(total);
+      svg.append(el('path', { fill: b.err > 0 ? 'var(--series-err)' : 'var(--series-ok)',
+        d: `M ${x0} ${yTop + topH - (b.err > 0 ? gap : 0)} V ${yTop + r} Q ${x0} ${yTop} ${x0 + r} ${yTop} H ${x0 + barW - r} Q ${x0 + barW} ${yTop} ${x0 + barW} ${yTop + r} V ${yTop + topH - (b.err > 0 ? gap : 0)} Z` }));
+      if (b.err > 0 && b.ok > 0)
+        svg.append(el('rect', { x: x0, y: y(b.ok), width: barW, height: okH,
+          fill: 'var(--series-ok)' }));
+    }
+    const hit = el('rect', { x: padL + band * i, y: padT, width: band, height: plotH,
+      fill: 'transparent' });                          // 히트 영역은 밴드 전체
+    hit.addEventListener('pointermove', (ev) => showTooltip(ev, b, size));
+    hit.addEventListener('pointerleave', hideTooltip);
+    svg.append(hit);
+  });
+  wrap.append(svg);
+  if (unstamped > 0) {
+    const p = document.createElement('p'); p.className = 'hint';
+    p.textContent = `타임스탬프가 없는 요청 ${unstamped}건은 합계에만 포함되고 차트에서는 제외했습니다.`;
+    wrap.append(p);
+  }
+  renderChartTable(buckets, size);
+}
+
+function showTooltip(ev, b, size) {
+  const tip = $('tooltip'); tip.replaceChildren();
+  const title = document.createElement('div'); title.className = 't-title';
+  title.textContent = bucketLabel(b.t, size);
+  tip.append(title);
+  const rows = [['var(--series-ok)', b.ok, '정상'], ['var(--series-err)', b.err, '오류·차단']];
+  for (const [c, v, name] of rows) {
+    const r = document.createElement('div'); r.className = 't-row';
+    const k = document.createElement('span'); k.className = 't-key'; k.style.background = c;
+    const val = document.createElement('span'); val.className = 't-val'; val.textContent = String(v);
+    const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = name;
+    r.append(k, val, nm); tip.append(r);
+  }
+  const sum = document.createElement('div'); sum.className = 't-row';
+  const val = document.createElement('span'); val.className = 't-val'; val.textContent = String(b.ok + b.err);
+  const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = '합계';
+  sum.append(val, nm); tip.append(sum);
+  tip.style.display = 'block';
+  tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - 180) + 'px';
+  tip.style.top = (ev.clientY + 14) + 'px';
+}
+function hideTooltip() { $('tooltip').style.display = 'none'; }
+
+function renderChartTable(buckets, size) {
+  const box = $('chartTable'); box.replaceChildren();
+  if (!buckets.length) return;
+  const tb = document.createElement('table');
+  tb.append(theadRow(['시간대', '정상', '오류·차단', '합계']));
+  for (const b of buckets) {
+    tb.append(tdRow([bucketLabel(b.t, size), b.ok, b.err, b.ok + b.err],
+      [false, true, true, true]));
+  }
+  box.append(tb);
+}
+
+/* ----- 표 유틸 ----- */
+function theadRow(cols, numFlags) {
+  const thead = document.createElement('thead'); const tr = document.createElement('tr');
+  cols.forEach((c, i) => { const th = document.createElement('th');
+    if (numFlags && numFlags[i]) th.className = 'num';
+    th.textContent = c; tr.append(th); });
+  thead.append(tr); return thead;
+}
+function tdRow(cols, numFlags, cls) {
+  const tr = document.createElement('tr'); if (cls) tr.className = cls;
+  cols.forEach((c, i) => { const td = document.createElement('td');
+    if (numFlags && numFlags[i]) td.className = 'num';
+    if (i === 0 && String(c).startsWith('/')) td.classList.add('path');
+    td.textContent = String(c); tr.append(td); });
+  return tr;
+}
+
+function renderEndpoints(f) {
+  const box = $('endpointTable'); box.replaceChildren();
+  const map = new Map();
+  for (const e of f.entries) {
+    const key = e.method + ' ' + e.path.split('?')[0];
+    let s = map.get(key);
+    if (!s) { s = { n: 0, ok: 0, c4: 0, c5: 0, dur: 0, max: 0 }; map.set(key, s); }
+    s.n++; s.dur += e.durMs; s.max = Math.max(s.max, e.durMs);
+    if (e.status >= 500) s.c5++; else if (e.status >= 400) s.c4++; else s.ok++;
+  }
+  if (!map.size) { box.textContent = '데이터 없음'; return; }
+  const tb = document.createElement('table');
+  tb.append(theadRow(['엔드포인트', '건수', '정상', '4xx', '5xx', '평균', '최대'],
+    [false, true, true, true, true, true, true]));
+  [...map.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 15)
+    .forEach(([k, s]) => tb.append(tdRow(
+      [k.split(' ')[1] + ' (' + k.split(' ')[0] + ')', s.n, s.ok, s.c4, s.c5,
+       fmtDur(s.dur / s.n), fmtDur(s.max)],
+      [false, true, true, true, true, true, true],
+      s.c5 > 0 ? 'err' : undefined)));
+  box.append(tb);
+}
+
+function renderEvents(f) {
+  const box = $('eventList'); box.replaceChildren();
+  if (!f.events.length) { box.textContent = '경고 이벤트 없음'; return; }
+  const tb = document.createElement('table');
+  tb.append(theadRow(['시각', '유형', '내용']));
+  f.events.slice(-100).reverse().forEach((e) =>
+    tb.append(tdRow([fmtTime(e.ts), e.type, e.text.slice(0, 160)])));
+  box.append(tb);
+}
+
+function renderRecent(f) {
+  const box = $('recentTable'); box.replaceChildren();
+  if (!f.entries.length) { box.textContent = '데이터 없음'; return; }
+  const tb = document.createElement('table');
+  tb.append(theadRow(['시각', '서비스', '메서드', '경로', '상태', '소요'],
+    [false, false, false, false, true, true]));
+  [...f.entries].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)).slice(0, 100)
+    .forEach((e) => tb.append(tdRow(
+      [fmtTime(e.ts), e.service, e.method, e.path, e.status, fmtDur(e.durMs)],
+      [false, false, false, false, true, true],
+      e.status >= 400 ? 'err' : undefined)));
+  box.append(tb);
+}
+
+function render() {
+  const f = filtered();
+  renderKpis(f); renderChart(f); renderEndpoints(f); renderEvents(f); renderRecent(f);
+}
+
+/* ----- 입력·테마·이벤트 ----- */
+$('addBtn').addEventListener('click', () => { appendRaw($('logInput').value); $('logInput').value = ''; });
+$('fileInput').addEventListener('change', async (ev) => {
+  for (const file of ev.target.files) appendRaw(await file.text());
+  ev.target.value = '';
+});
+$('clearBtn').addEventListener('click', () => {
+  if (!confirm('보관 중인 로그를 모두 지울까요?')) return;
+  localStorage.removeItem(STORE_KEY); loadStore(); render();
+});
+$('sampleBtn').addEventListener('click', () => {
+  const base = Date.now() - 3600_000;
+  const lines = [];
+  for (let i = 0; i < 60; i++) {
+    const t = new Date(base + i * 60_000).toISOString();
+    lines.push(`${t}  INFO 1 --- [http-nio-1] access : GET /api/contracts/learn -> 200 (${20 + (i % 7) * 3}ms, 0B)`);
+    if (i % 4 === 0) lines.push(`${t}  INFO 1 --- [http-nio-2] access : POST /api/contracts/analyze -> 200 (${70000 + i * 300}ms, 48213B)`);
+    if (i % 9 === 0) lines.push(`${t.replace('T', ' ').slice(0, 19)},123 INFO [access] POST /analyze -> 200 (${(72 + i / 4).toFixed(2)}s)`);
+    if (i % 13 === 0) lines.push(`${t}  INFO 1 --- [http-nio-3] access : POST /api/auth/login -> 401 (12ms, 84B)`);
+    if (i === 30) lines.push(`${t.replace('T', ' ').slice(0, 19)},500 WARNING [src.main] 서비스 토큰 불일치 — 백엔드 우회 시도 가능성 (/analyze)`);
+    if (i === 45) lines.push(`${t}  INFO 1 --- [http-nio-4] access : POST /api/contracts/analyze -> 502 (120000ms, 51002B)`);
+  }
+  appendRaw(lines.join('\n'));
+});
+$('tableToggle').addEventListener('click', () => {
+  const t = $('chartTable'), pressed = t.hidden;
+  t.hidden = !t.hidden; $('chartWrap').style.display = t.hidden ? '' : 'none';
+  $('tableToggle').textContent = t.hidden ? '표로 보기' : '차트로 보기';
+  $('tableToggle').setAttribute('aria-pressed', String(pressed));
+});
+$('themeBtn').addEventListener('click', () => {
+  const cur = document.documentElement.dataset.theme;
+  const dark = cur ? cur === 'dark'
+    : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+});
+for (const id of ['rangeSel', 'serviceSel', 'healthChk', 'pathFilter'])
+  $(id).addEventListener(id === 'pathFilter' ? 'input' : 'change', render);
+window.addEventListener('resize', () => renderChart(filtered()));
+
+loadStore(); render();
+</script>
+</body>
+</html>

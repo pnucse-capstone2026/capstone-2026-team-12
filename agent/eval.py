@@ -1,0 +1,325 @@
+"""파이프라인 자동 평가 스크립트.
+
+data/의 계약서 5건을 전부 4단계 파이프라인(Parser -> Analysis -> Persona ->
+Judge, "Ours")에 실행하고, data/labels.md의 정답과 대조하여 문서별 위험 조항
+리콜(찾은 위험 건수 / 정답 위험 건수)과 정상 문서 오탐(false positive)
+건수를 측정한다. 문서별 실행 시간과 대략적 토큰 사용량도 함께 기록해
+docs/eval_results_v2.md로 저장한다.
+
+같은 5건을 단일 LLM 호출 Baseline(src/baseline.py, 착수보고서 <표 6>)으로도
+실행해 Ours와 나란히 비교한 결과를 docs/eval_baseline_vs_ours.md로 저장한다.
+Judge는 두 경로 모두 동일한 judge_node를 사용해 같은 기준으로 채점하고,
+판단 기준(risk_type 판정 규칙/표준 조항 예외/risk_level 기준)도 analysis.txt와
+baseline.txt에 동일하게 넣어 "판단 기준 차이"가 아니라 "파이프라인 구조 차이"만
+비교되도록 한다. contract_05의 위험/주의 판정 조항 상세는
+docs/eval_baseline_contract05_detail.md로 별도 저장한다.
+
+주의: 메인 표의 "리콜"은 조항 단위로 정확히 같은 조항인지까지 대조하는 것이
+아니라, risk_level != "안전"으로 판정된 조항 개수를 정답 위험 건수와 비교하는
+건수 기준 근사치다(하위 호환용으로 유지). data/clause_level_labels.csv가
+커버하는 문서(현재 5건 전부)는 clause_id 단위로 정확히 매칭한 정밀
+recall/precision을 별도 표(render_clause_precision_markdown)로 함께 낸다 —
+parser.split_clauses()가 만드는 clause_id(clause_NNN)가 결정적이라는 전제.
+
+사용법:
+    cd agent
+    source .venv/bin/activate
+    python eval.py
+"""
+
+import csv
+import time
+from collections import defaultdict
+from pathlib import Path
+from typing import Callable
+
+from src.baseline import run_baseline
+from src.graph import run_pipeline
+from src.llm import get_token_usage, reset_token_usage
+from src.nodes.analysis import STRUCTURAL_RISK_CLAUSE_ID
+from src.state import PipelineState, judge_score_avg
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+OUT_PATH = Path(__file__).parent.parent / "docs" / "eval_results_v2.md"
+COMPARISON_OUT_PATH = Path(__file__).parent.parent / "docs" / "eval_baseline_vs_ours.md"
+DETAIL_FILENAME = "contract_05_molit_standard.txt"
+DETAIL_OUT_PATH = Path(__file__).parent.parent / "docs" / "eval_baseline_contract05_detail.md"
+CLAUSE_LABELS_PATH = Path(__file__).parent.parent / "data" / "clause_level_labels.csv"
+CLAUSE_PRECISION_OUT_PATH = Path(__file__).parent.parent / "docs" / "eval_clause_precision.md"
+
+# data/labels.md 기준 문서별 기대 위험 조항 수
+EXPECTED_RISK_COUNTS = {
+    "sample_lease_contract.txt": 4,
+    "contract_02_finance_loan.txt": 6,
+    "contract_03_lease_normal.txt": 0,
+    "contract_04_gym_membership.txt": 4,
+    "contract_05_molit_standard.txt": 0,
+}
+
+Runner = Callable[..., PipelineState]
+
+
+def _load_clause_labels() -> dict:
+    """data/clause_level_labels.csv -> {document: {clause_id: "위험"|"안전"}}."""
+    labels: dict = defaultdict(dict)
+    with open(CLAUSE_LABELS_PATH, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            labels[row["document"]][row["clause_id"]] = row["label"]
+    return dict(labels)
+
+
+CLAUSE_LABELS = _load_clause_labels()
+
+
+def _clause_precision_recall(filename: str, adapted_results: list) -> dict | None:
+    """clause_level_labels.csv에 있는 문서만 조항 단위 TP/FP/FN/정밀도/리콜 계산."""
+    labels = CLAUSE_LABELS.get(filename)
+    if not labels:
+        return None
+
+    tp = fp = fn = tn = 0
+    for r in adapted_results:
+        gold = labels.get(r["clause_id"])
+        if gold is None:
+            continue  # 라벨 없는 조항(파서 결과가 골든셋 작성 시점과 달라진 경우)은 집계에서 제외
+        predicted_risk = r["risk_level"] != "안전"
+        gold_risk = gold == "위험"
+        if gold_risk and predicted_risk:
+            tp += 1
+        elif gold_risk and not predicted_risk:
+            fn += 1
+        elif not gold_risk and predicted_risk:
+            fp += 1
+        else:
+            tn += 1
+
+    precision = tp / (tp + fp) if (tp + fp) else None
+    recall = tp / (tp + fn) if (tp + fn) else None
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn, "precision": precision, "recall": recall}
+
+
+def _measure(runner: Runner, filename: str, expected_risk: int) -> dict:
+    text = (DATA_DIR / filename).read_text(encoding="utf-8")
+
+    reset_token_usage()
+    start = time.perf_counter()
+    result = runner(text, persona="adult")
+    elapsed = time.perf_counter() - start
+    tokens = get_token_usage()
+
+    # STRUCTURAL_RISK_CLAUSE_ID(구조적 위험 체크리스트)는 조항 판정이 아니라 항상
+    # 고정 추가되는 안내문이라 리콜/오탐 집계에서 제외한다 (docs/jeonse_fraud_causes_research.md).
+    scored_results = [r for r in result["adapted_results"] if r["clause_id"] != STRUCTURAL_RISK_CLAUSE_ID]
+    found_risk = sum(1 for r in scored_results if r["risk_level"] != "안전")
+
+    if expected_risk == 0:
+        recall_display = "-"
+        false_positive = found_risk
+    else:
+        recall_display = f"{min(found_risk, expected_risk)}/{expected_risk}"
+        false_positive = max(found_risk - expected_risk, 0)
+
+    judge_avg = judge_score_avg(result["judge_scores"])
+
+    return {
+        "file": filename,
+        "clause_count": len(result["clauses"]),
+        "recall_display": recall_display,
+        "false_positive": false_positive,
+        "elapsed": elapsed,
+        "input_tokens": tokens["input_tokens"],
+        "output_tokens": tokens["output_tokens"],
+        "judge_scores": result["judge_scores"],
+        "judge_avg": judge_avg,
+        "retry_count": result["retry_count"],
+        "needs_review": result["needs_review"],
+        "adapted_results": result["adapted_results"],
+        "clause_precision_recall": _clause_precision_recall(filename, result["adapted_results"]),
+    }
+
+
+def evaluate_file(filename: str, expected_risk: int) -> dict:
+    return _measure(run_pipeline, filename, expected_risk)
+
+
+def evaluate_file_baseline(filename: str, expected_risk: int) -> dict:
+    return _measure(run_baseline, filename, expected_risk)
+
+
+def render_markdown(rows: list) -> str:
+    total_elapsed = sum(r["elapsed"] for r in rows)
+    total_input = sum(r["input_tokens"] for r in rows)
+    total_output = sum(r["output_tokens"] for r in rows)
+
+    lines = [
+        "# 평가 결과 (Parser v2 + Prompt v2)",
+        "",
+        "`agent/eval.py`로 `data/`의 계약서 5건을 파이프라인에 실행하고 "
+        "`data/labels.md` 정답과 대조한 결과.",
+        "",
+        "| 문서 | 조항 수 | 위험 리콜(찾음/정답) | 오탐(FP) | 실행시간(초) | "
+        "토큰(입력/출력) | Judge 평균 | 재시도 | 주의필요 |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['file']} | {r['clause_count']} | {r['recall_display']} | "
+            f"{r['false_positive']} | {r['elapsed']:.1f} | "
+            f"{r['input_tokens']}/{r['output_tokens']} | {r['judge_avg']:.2f} | "
+            f"{r['retry_count']} | {r['needs_review']} |"
+        )
+
+    lines += [
+        "",
+        f"**합계**: 실행시간 {total_elapsed:.1f}초, 토큰 {total_input}/{total_output} (입력/출력)",
+        "",
+        "리콜은 조항 단위 정답 매칭이 아니라 문서별 위험 판정 건수 대 정답 건수의 "
+        "근사치다 (자세한 내용은 eval.py 상단 주석 참고).",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_clause_precision_markdown(rows: list) -> str:
+    """clause_level_labels.csv 기반 조항 단위 정밀 recall/precision 표."""
+    lines = [
+        "# 조항 단위 정밀 recall/precision",
+        "",
+        "`data/clause_level_labels.csv`(66개 라벨)와 `parser.split_clauses()`의 "
+        "clause_id를 직접 매칭한 결과. 문서 단위 근사치(`eval_results_v2.md`)와 달리 "
+        "TP/FP/FN을 조항 단위로 정확히 센다.",
+        "",
+        "| 문서 | TP | FP | FN | TN | Precision | Recall |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    total_tp = total_fp = total_fn = total_tn = 0
+    for r in rows:
+        cpr = r.get("clause_precision_recall")
+        if cpr is None:
+            continue
+        total_tp += cpr["tp"]
+        total_fp += cpr["fp"]
+        total_fn += cpr["fn"]
+        total_tn += cpr["tn"]
+        p = f"{cpr['precision']:.2f}" if cpr["precision"] is not None else "-"
+        r_ = f"{cpr['recall']:.2f}" if cpr["recall"] is not None else "-"
+        lines.append(
+            f"| {r['file']} | {cpr['tp']} | {cpr['fp']} | {cpr['fn']} | {cpr['tn']} | {p} | {r_} |"
+        )
+
+    overall_p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) else None
+    overall_r = total_tp / (total_tp + total_fn) if (total_tp + total_fn) else None
+    lines += [
+        "",
+        f"**전체 합계**: TP={total_tp} FP={total_fp} FN={total_fn} TN={total_tn} | "
+        f"Precision={overall_p:.2f} Recall={overall_r:.2f}"
+        if overall_p is not None and overall_r is not None
+        else "**전체 합계**: 라벨된 위험/안전 조항이 없어 계산 불가",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_comparison_markdown(ours_rows: list, baseline_rows: list) -> str:
+    lines = [
+        "# Baseline vs Ours 비교",
+        "",
+        "착수보고서 <표 6> 성능 검증 시나리오: 단일 LLM 호출(Baseline, 페르소나 적응·"
+        "재생성 없음) vs 4단계 파이프라인(Ours). 같은 모델(MODEL_WORKER)과 같은 Judge "
+        "기준(judge_node)으로 채점해 파이프라인 구조 차이만 비교한다.",
+        "",
+        "| 문서 | Judge 평균 (Ours/Base) | 위험 리콜 (Ours/Base) | 오탐 FP (Ours/Base) | "
+        "실행시간초 (Ours/Base) | 토큰 (Ours/Base) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for o, b in zip(ours_rows, baseline_rows):
+        lines.append(
+            f"| {o['file']} | {o['judge_avg']:.2f} / {b['judge_avg']:.2f} | "
+            f"{o['recall_display']} / {b['recall_display']} | "
+            f"{o['false_positive']} / {b['false_positive']} | "
+            f"{o['elapsed']:.1f} / {b['elapsed']:.1f} | "
+            f"{o['input_tokens']}+{o['output_tokens']} / {b['input_tokens']}+{b['output_tokens']} |"
+        )
+
+    lines += [
+        "",
+        "## Judge 4 Aspect 상세 (Ours/Base)",
+        "",
+        "| 문서 | clarity | faithfulness | risk_coverage | actionability |",
+        "|---|---|---|---|---|",
+    ]
+    for o, b in zip(ours_rows, baseline_rows):
+        cells = []
+        for aspect in ("clarity", "faithfulness", "risk_coverage", "actionability"):
+            cells.append(f"{o['judge_scores'][aspect]:.1f}/{b['judge_scores'][aspect]:.1f}")
+        lines.append(f"| {o['file']} | " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "리콜/오탐 기준은 eval.py 상단 주석과 동일한 건수 기준 근사치다.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _risky_clause_lines(rows: list) -> list:
+    lines = []
+    risky = [
+        r for r in rows
+        if r["risk_level"] != "안전" and r["clause_id"] != STRUCTURAL_RISK_CLAUSE_ID
+    ]
+    if not risky:
+        lines.append("(위험/주의로 판정된 조항 없음)")
+        return lines
+    for r in risky:
+        lines.append(f"- **{r['clause_id']}** [{r['risk_level']} / {r['risk_type']}]")
+        lines.append(f"  - 근거: {r['risk_evidence']}")
+    return lines
+
+
+def render_risky_clause_detail(filename: str, ours_row: dict, baseline_row: dict) -> str:
+    lines = [
+        f"# {filename} — Baseline vs Ours 위험 판정 조항 상세",
+        "",
+        "`data/labels.md` 정답(이 문서는 위험 0건이 정답)과 눈으로 대조해 "
+        "진짜 오탐인지 확인하기 위한 목록.",
+        "",
+        "## Baseline이 위험/주의로 판정한 조항",
+        "",
+        *_risky_clause_lines(baseline_row["adapted_results"]),
+        "",
+        "## Ours가 위험/주의로 판정한 조항",
+        "",
+        *_risky_clause_lines(ours_row["adapted_results"]),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def main() -> None:
+    ours_rows = [evaluate_file(f, expected) for f, expected in EXPECTED_RISK_COUNTS.items()]
+    markdown = render_markdown(ours_rows)
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUT_PATH.write_text(markdown, encoding="utf-8")
+    print(markdown)
+    print(f"저장 완료: {OUT_PATH}")
+
+    clause_precision_markdown = render_clause_precision_markdown(ours_rows)
+    CLAUSE_PRECISION_OUT_PATH.write_text(clause_precision_markdown, encoding="utf-8")
+    print(clause_precision_markdown)
+    print(f"저장 완료: {CLAUSE_PRECISION_OUT_PATH}")
+
+    baseline_rows = [
+        evaluate_file_baseline(f, expected) for f, expected in EXPECTED_RISK_COUNTS.items()
+    ]
+    comparison_markdown = render_comparison_markdown(ours_rows, baseline_rows)
+    COMPARISON_OUT_PATH.write_text(comparison_markdown, encoding="utf-8")
+    print(comparison_markdown)
+    print(f"저장 완료: {COMPARISON_OUT_PATH}")
+
+    ours_detail = next(r for r in ours_rows if r["file"] == DETAIL_FILENAME)
+    baseline_detail = next(r for r in baseline_rows if r["file"] == DETAIL_FILENAME)
+    detail_markdown = render_risky_clause_detail(DETAIL_FILENAME, ours_detail, baseline_detail)
+    DETAIL_OUT_PATH.write_text(detail_markdown, encoding="utf-8")
+    print(detail_markdown)
+    print(f"저장 완료: {DETAIL_OUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,41 @@
+# 비밀 정보 (절대 커밋 금지)
+.env
+*.env
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+build/
+dist/
+*.tsbuildinfo
+
+# Gradle
+.gradle/
+
+# 에디터/OS
+.idea/
+.vscode/
+.DS_Store
+docs/eval_pairwise_anchor_*_checkpoint.jsonl
+
+# 데이터 수집 스프린트 원자료 (용량 문제로 gitignore)
+data/raw/sources_research/hldcc_casebooks/*.pdf
+data/raw/sources_research/hldcc_casebooks/*.txt
+data/raw/sources_research/hldcc_board_new_cases.txt
+data/raw/sources_research/fss_mediation/
+
+# AI Hub 원본 데이터 — 재배포 금지 약관 (docs/aihub580_data_access.md 참조)
+data/raw/sources_research/aihub580/
+.gstack/
+
+# 최종보고서 조판 폰트(약 68MB) — docs/report_tools/fetch_fonts.sh 로 내려받음
+docs/report_tools/fonts/
+
+# Render 로그 수집기 비밀키·산출물 (docs/hackathon_finance_ai/tools/)
+.render_pull.env
+docs/hackathon_finance_ai/tools/logs/

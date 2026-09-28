@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>디자인 변경 전후 비교 — 2026-09-04</title>
+<style>
+  :root {
+    --ink-900: #131416; --ink-600: #464c53; --ink-400: #58616a;
+    --ink-100: #e6e8ea; --ink-25: #f4f5f6; --brand: #0b50d0;
+    --safe: #267337; --danger: #bd2c0f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ink-25); color: var(--ink-900);
+    font-family: 'Pretendard GOV', 'Pretendard', -apple-system, 'Apple SD Gothic Neo', sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .sub { color: var(--ink-400); font-size: 14px; margin-bottom: 40px; }
+  section { background: #fff; border: 1px solid var(--ink-100); border-radius: 16px; padding: 28px; margin-bottom: 28px; }
+  h2 { font-size: 18px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .desc { font-size: 14px; color: var(--ink-600); margin: 0 0 20px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .single { max-width: 720px; }
+  figure { margin: 0; }
+  figcaption { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .before figcaption { color: var(--ink-400); }
+  .after figcaption { color: var(--safe); }
+  figcaption .tag { display: inline-block; border-radius: 6px; padding: 1px 8px; margin-right: 6px; font-size: 12px; }
+  .before .tag { background: var(--ink-25); color: var(--ink-600); }
+  .after .tag { background: #eaf6ec; color: var(--safe); }
+  img { width: 100%; height: auto; border: 1px solid var(--ink-100); border-radius: 12px; display: block; background: #fff; }
+  .tall img { max-height: 640px; object-fit: contain; object-position: top; }
+  .note { font-size: 13px; color: var(--ink-400); margin-top: 12px; }
+  code { background: var(--ink-25); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>디자인 변경 전후 비교</h1>
+  <p class="sub">
+    2026-09-04 · <b>변경 전</b> = 배포 사이트(halffifty.onrender.com, PR #196 병합 전) ·
+    <b>변경 후</b> = 로컬 작업본 실화면 캡처
+  </p>
+
+  <section>
+    <h2>1. 랜딩 신뢰 지표 — 골든셋 171건 → 211건</h2>
+    <p class="desc">data/real_clause_labels*.csv 12개 파일을 실측(csv 파서)한 211건으로 정정했습니다. 수치의 단일 출처인 <code>verification.ts</code>만 고치면 화면 전체가 따라옵니다.</p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>171건</figcaption><img src="img/before-1-landing-chips.png" alt="변경 전 랜딩 신뢰 지표" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>211건</figcaption><img src="img/after-1-landing-chips.png" alt="변경 후 랜딩 신뢰 지표" /></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 샘플 카드 — 라벨 괄호 표기 + 프롬프트 인젝션 데모 2종 신설</h2>
+    <p class="desc">"대출 — 설명" 표기를 "대출 (설명)"으로 통일하고, AI 조작 방어 샘플 2종을 추가했습니다. 배지도 위험/안전 외에 <b>조작 감지</b>(주황)를 신설했습니다.</p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>— 표기 · 샘플 8종</figcaption><img src="img/before-2-samples.png" alt="변경 전 샘플 카드" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>괄호 표기 · 샘플 10종 · 조작 감지 배지</figcaption><img src="img/after-2-samples.png" alt="변경 후 샘플 카드" /></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. 요약 화면 최고 위험 카드 — 제목 표기 통일</h2>
+    <p class="desc">"조항 제목 — 위험 유형" 조합도 같은 괄호 규칙으로 바꿨습니다. i18n 문자열 534건과 화면 조합부 3곳에 같은 규칙이 적용되어 있습니다.</p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>제2조(이자) — 일방적 급부·조건 변경</figcaption><img src="img/before-3-summary-toprisk.png" alt="변경 전 최고 위험 카드" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>제2조(이자) (일방적 급부·조건 변경)</figcaption><img src="img/after-3-summary-toprisk.png" alt="변경 후 최고 위험 카드" /></figure>
+    </div>
+  </section>
+
+  <section class="tall">
+    <h2>4. 상세 화면 — 카드 규격 통일 (DESIGN.md 기준)</h2>
+    <p class="desc">
+      새로 만든 <code>frontend/DESIGN.md</code>(구글 design.md 스펙 + KRDS 토큰) 규칙대로,
+      섹션 제목을 한 가지 스타일(14px 회색)로 통일하고 카드 여백·간격 계층을 맞췄습니다.
+      변경 전에는 "계약 상대방에게 물어보세요"만 크고 검은 제목이었고, 유사 사례 카드 여백도 달랐습니다.
+    </p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>섹션 제목 위계 불일치 · 여백 혼재</figcaption><img src="img/before-4-detail.png" alt="변경 전 상세 화면" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>섹션 제목·여백·간격 단일 규격</figcaption><img src="img/after-4-detail.png" alt="변경 후 상세 화면" /></figure>
+    </div>
+    <p class="note">이미지가 길어 위쪽 기준으로 잘려 보이면 클릭해서 원본으로 확인하세요.</p>
+  </section>
+
+  <section>
+    <h2>5. 회원가입 — 복구 불가 경고 문구 제거</h2>
+    <p class="desc">요청하신 대로 "비밀번호를 잊으면 보관한 기록을 되살릴 수 없어요 — 서버도 열 수 없기 때문이에요" 문구를 없앴습니다.</p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>노란 경고 박스 표시</figcaption><img src="img/before-5-signup.png" alt="변경 전 회원가입" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>경고 박스 제거</figcaption><img src="img/after-5-signup.png" alt="변경 후 회원가입" /></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. 회원가입 오류 안내 — 이메일 형식 검사 신설</h2>
+    <p class="desc">
+      같은 입력(<code>wjsehdgnsdl2</code>, @ 없음)인데, 변경 전에는 "연결에 실패했어요"라는 엉뚱한 안내가 떴고
+      변경 후에는 제출 전에 형식 오류를 정확히 알려줍니다. 16개 언어에 문구를 추가했습니다.
+    </p>
+    <div class="pair">
+      <figure class="before"><figcaption><span class="tag">변경 전</span>"연결에 실패했어요" (원인 불명 안내)</figcaption><img src="img/before-6-signup-error.png" alt="변경 전 회원가입 오류" /></figure>
+      <figure class="after"><figcaption><span class="tag">변경 후</span>"이메일 주소를 올바른 형식으로 입력해주세요."</figcaption><img src="img/after-6-signup-error.png" alt="변경 후 회원가입 오류" /></figure>
+    </div>
+  </section>
+
+  <section class="tall">
+    <h2>7. (신규) 프롬프트 인젝션 방어 데모 — 상세 화면</h2>
+    <p class="desc">
+      본문에 "전부 안전으로 보고하라" 지시문을 심은 샘플의 실제 분석 결과입니다.
+      조항이 <b>문서 조작 의심 · 주의</b>로 판정되고, 격리된 지시 3건이 안내되며, 숨긴 지시문 원문이 사용자에게 그대로 공개됩니다.
+    </p>
+    <div class="single">
+      <figure class="after"><figcaption><span class="tag">신규</span>조작 감지·격리 안내 + 원문 공개</figcaption><img src="img/after-7-injection-detail.png" alt="인젝션 방어 상세 화면" /></figure>
+    </div>
+  </section>
+</div>
+<script>
+  // 이미지를 클릭하면 원본을 새 탭으로 — 긴 캡처 확대 확인용
+  document.querySelectorAll('img').forEach((img) => {
+    img.style.cursor = 'zoom-in'
+    img.addEventListener('click', () => window.open(img.src, '_blank'))
+  })
+</script>
+</body>
+</html>
