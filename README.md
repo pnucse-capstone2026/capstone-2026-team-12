@@ -1,4 +1,4 @@
-# half-fifty (하프피프티) — 금융 취약계층을 위한 계약 문서 단순화·위험 안내 에이전트
+# 조목조목 — 금융 취약계층을 위한 계약 문서 단순화·위험 안내 에이전트
 
 [![소개 및 시연 영상](http://img.youtube.com/vi/WJCZUbUizk8/0.jpg)](https://www.youtube.com/watch?v=WJCZUbUizk8)
 
